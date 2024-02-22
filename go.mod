@@ -8,8 +8,8 @@ require (
 	github.com/go-haru/log v0.0.2
 	github.com/go-haru/network v0.0.1
 	github.com/go-sql-driver/mysql v1.7.1
-	gorm.io/driver/mysql v1.5.2
-	gorm.io/gorm v1.25.6
+	gorm.io/driver/mysql v1.5.4
+	gorm.io/gorm v1.25.7
 )
 
 require (

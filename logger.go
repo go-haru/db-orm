@@ -4,10 +4,10 @@ import (
 	"context"
 	"errors"
 	"runtime/debug"
-	"strconv"
 	"strings"
 	"time"
 
+	"github.com/go-haru/field"
 	gormLogger "gorm.io/gorm/logger"
 	"gorm.io/gorm/utils"
 
@@ -18,7 +18,6 @@ type loggerOptions struct {
 	IgnoreNotfound bool     `json:"ignoreNotfound" yaml:"ignoreNotfound"` // true=ignore
 	SlowThreshold  Duration `json:"slowThreshold" yaml:"slowThreshold"`   // by ms, 0=ignore
 	Level          string   `json:"level" yaml:"level"`                   // none/info/warn/error
-	Name           string   `json:"name" yaml:"name"`
 }
 
 func (o *loggerOptions) ParseLevel() gormLogger.LogLevel {
@@ -43,37 +42,33 @@ type logger struct {
 	ignoreNotfound bool
 	slowThreshold  time.Duration
 	level          gormLogger.LogLevel
-	underlying     log.Logger
 }
 
 func (l *logger) LogMode(level gormLogger.LogLevel) gormLogger.Interface {
-	return &logger{
-		level:      level,
-		underlying: l.underlying,
-	}
+	return &logger{level: level}
 }
 
-func (l *logger) Debug(_ context.Context, s string, i ...interface{}) {
+func (l *logger) Debug(ctx context.Context, s string, i ...interface{}) {
 	if l.level >= gormLogger.Info+1 {
-		l.underlying.Debugf(s, i...)
+		log.C(ctx).AddDepth(2).Debugf(s, i...)
 	}
 }
 
-func (l *logger) Info(_ context.Context, s string, i ...interface{}) {
+func (l *logger) Info(ctx context.Context, s string, i ...interface{}) {
 	if l.level >= gormLogger.Info {
-		l.underlying.Infof(s, i...)
+		log.C(ctx).AddDepth(2).Infof(s, i...)
 	}
 }
 
-func (l *logger) Warn(_ context.Context, s string, i ...interface{}) {
+func (l *logger) Warn(ctx context.Context, s string, i ...interface{}) {
 	if l.level >= gormLogger.Warn {
-		l.underlying.Warnf(s, i...)
+		log.C(ctx).AddDepth(2).Warnf(s, i...)
 	}
 }
 
-func (l *logger) Error(_ context.Context, s string, i ...interface{}) {
+func (l *logger) Error(ctx context.Context, s string, i ...interface{}) {
 	if l.level >= gormLogger.Error {
-		l.underlying.Errorf(s, i...)
+		log.C(ctx).AddDepth(2).Errorf(s, i...)
 	}
 }
 
@@ -85,38 +80,38 @@ func init() {
 	}
 }
 
+func (l *logger) logger(ctx context.Context, elapsed time.Duration, row int64, sql string, caller string) log.Logger {
+	var fields = []field.Field{
+		field.String("__caller__", caller), field.Duration("elapsed", elapsed), field.String("sql", sql),
+	}
+	if row >= 0 {
+		fields = append(fields, field.Int("affected", row))
+	}
+	return log.C(ctx).With()
+}
+
 func (l *logger) Trace(ctx context.Context, begin time.Time, fc func() (sql string, rowsAffected int64), err error) {
 	if l.level <= gormLogger.Silent {
 		return
 	}
-	var rowsStr string
-	sql, rows := fc()
-	if rows == -1 {
-		rowsStr = "-"
-	} else {
-		rowsStr = strconv.FormatInt(rows, 10)
-	}
-	elapsed := time.Since(begin)
-	caller := strings.TrimLeft(strings.TrimPrefix(utils.FileWithLineNum(), mainPkg), "/")
+	var sql, rows = fc()
+	var elapsed = time.Since(begin)
+	var caller = strings.TrimLeft(strings.TrimPrefix(utils.FileWithLineNum(), mainPkg), "/")
+	var tracedLogger = l.logger(ctx, elapsed, rows, sql, caller)
 	switch {
 	case err != nil && (!errors.Is(err, gormLogger.ErrRecordNotFound) || !l.ignoreNotfound):
-		l.Error(ctx, "error: %v (%d ms, %s row). # %s # %s", err, elapsed.Milliseconds(), rowsStr, sql, caller)
+		tracedLogger.Error("orm query error: ", err)
 	case l.slowThreshold != 0 && elapsed > l.slowThreshold:
-		l.Warn(ctx, "slow query (%d ms, %s row). # %s # %s", elapsed.Milliseconds(), l.slowThreshold, rowsStr, sql, caller)
+		tracedLogger.With(field.Duration("threshold", l.slowThreshold)).Warn("orm slow query")
 	default:
-		l.Debug(ctx, "query (%d ms, %s row). # %s # %s", elapsed.Milliseconds(), rowsStr, sql, caller)
+		tracedLogger.Debug("orm query")
 	}
 }
 
 func NewLogger(options *loggerOptions) gormLogger.Interface {
-	var underlying = log.Current().AddDepth(2)
-	if options.Name != "" {
-		underlying = underlying.WithName(options.Name)
-	}
 	return &logger{
 		ignoreNotfound: options.IgnoreNotfound,
 		slowThreshold:  options.SlowThreshold.Duration(),
 		level:          options.ParseLevel(),
-		underlying:     underlying,
 	}
 }
