@@ -15,6 +15,7 @@ import (
 )
 
 type loggerOptions struct {
+	Tracing        bool     `json:"tracing" yaml:"tracing"`
 	IgnoreNotfound bool     `json:"ignoreNotfound" yaml:"ignoreNotfound"` // true=ignore
 	SlowThreshold  Duration `json:"slowThreshold" yaml:"slowThreshold"`   // by ms, 0=ignore
 	Level          string   `json:"level" yaml:"level"`                   // none/info/warn/error
@@ -39,6 +40,7 @@ func (o *loggerOptions) ParseLevel() gormLogger.LogLevel {
 }
 
 type logger struct {
+	tracing        bool
 	ignoreNotfound bool
 	slowThreshold  time.Duration
 	level          gormLogger.LogLevel
@@ -91,7 +93,7 @@ func (l *logger) logger(ctx context.Context, elapsed time.Duration, row int64, s
 }
 
 func (l *logger) Trace(ctx context.Context, begin time.Time, fc func() (sql string, rowsAffected int64), err error) {
-	if l.level <= gormLogger.Silent {
+	if !l.tracing || l.level <= gormLogger.Silent {
 		return
 	}
 	var sql, rows = fc()
@@ -99,7 +101,7 @@ func (l *logger) Trace(ctx context.Context, begin time.Time, fc func() (sql stri
 	var caller = strings.TrimLeft(strings.TrimPrefix(utils.FileWithLineNum(), mainPkg), "/")
 	var tracedLogger = l.logger(ctx, elapsed, rows, sql, caller)
 	switch {
-	case err != nil && (!errors.Is(err, gormLogger.ErrRecordNotFound) || !l.ignoreNotfound):
+	case err != nil && !(l.ignoreNotfound && errors.Is(err, gormLogger.ErrRecordNotFound)):
 		tracedLogger.Error("orm query error: ", err)
 	case l.slowThreshold != 0 && elapsed > l.slowThreshold:
 		tracedLogger.With(field.Duration("threshold", l.slowThreshold)).Warn("orm slow query")
@@ -110,6 +112,7 @@ func (l *logger) Trace(ctx context.Context, begin time.Time, fc func() (sql stri
 
 func NewLogger(options *loggerOptions) gormLogger.Interface {
 	return &logger{
+		tracing:        options.Tracing,
 		ignoreNotfound: options.IgnoreNotfound,
 		slowThreshold:  options.SlowThreshold.Duration(),
 		level:          options.ParseLevel(),
