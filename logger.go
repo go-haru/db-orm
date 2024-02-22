@@ -87,7 +87,7 @@ func (l *logger) logger(ctx context.Context, elapsed time.Duration, row int64, s
 	if row >= 0 {
 		fields = append(fields, field.Int("affected", row))
 	}
-	return log.C(ctx).With()
+	return log.C(ctx).With(fields...)
 }
 
 func (l *logger) Trace(ctx context.Context, begin time.Time, fc func() (sql string, rowsAffected int64), err error) {
